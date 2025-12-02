@@ -56,6 +56,7 @@ class ZLPhotoPreviewController: UIViewController {
         ZLGifPreviewCell.zl.register(view)
         ZLLivePhotoPreviewCell.zl.register(view)
         ZLVideoPreviewCell.zl.register(view)
+        ZLNetVideoPreviewCell.zl.register(view)
         
         return view
     }()
@@ -473,6 +474,8 @@ class ZLPhotoPreviewController: UIViewController {
             
             if let cell = cell as? ZLVideoPreviewCell {
                 self.hideNavView = cell.isPlaying
+            } else if let cell = cell as? ZLNetVideoPreviewCell {
+                self.hideNavView = cell.isPlaying
             } else {
                 self.hideNavView = false
             }
@@ -500,12 +503,12 @@ class ZLPhotoPreviewController: UIViewController {
         let config = ZLPhotoConfiguration.default()
         let currentModel = arrDataSources[currentIndex]
         
-        if (!config.allowMixSelect && currentModel.type == .video) ||
-            (!config.showSelectBtnWhenSingleSelect && config.maxSelectCount == 1) {
+        if (!config.showSelectBtnWhenSingleSelect && config.maxSelectCount == 1) {
             selectBtn.isHidden = true
         } else {
             selectBtn.isHidden = false
         }
+        
         selectBtn.isSelected = arrDataSources[currentIndex].isSelected
 //        resetIndexLabelStatus()
         
@@ -526,14 +529,19 @@ class ZLPhotoPreviewController: UIViewController {
         refreshBottomViewFrame()
         
         var hideEditBtn = true
-        if selCount < config.maxSelectCount || nav.arrSelectedModels.contains(where: { $0 == currentModel }) {
+        var passMixSelectCondition = true
+        if !config.allowMixSelect, !nav.arrSelectedModels.isEmpty {
+            let isSelectVideo = nav.arrSelectedModels.first?.isVideo ?? false
+            passMixSelectCondition = isSelectVideo == currentModel.isVideo
+        }
+        
+        if passMixSelectCondition, selCount < config.maxSelectCount || nav.arrSelectedModels.contains(where: { $0 == currentModel }) {
             if config.allowEditImage,
                currentModel.type == .image || (currentModel.type == .gif && !config.allowSelectGif) || (currentModel.type == .livePhoto && !config.allowSelectLivePhoto) {
                 hideEditBtn = false
             }
             if config.allowEditVideo,
-               currentModel.type == .video,
-               selCount == 0 || (selCount == 1 && nav.arrSelectedModels.first == currentModel) {
+               currentModel.type == .video {
                 hideEditBtn = false
             }
         }
@@ -612,7 +620,7 @@ class ZLPhotoPreviewController: UIViewController {
             
             resetSubviewStatus()
         } else {
-            if !canAddModel(currentModel, currentSelectCount: nav.arrSelectedModels.count, sender: self) {
+            if !canAddModel(currentModel, currentSelectModels: nav.arrSelectedModels, sender: self) {
                 return
             }
             
@@ -713,8 +721,10 @@ class ZLPhotoPreviewController: UIViewController {
         
         func callbackBeforeDone() {
             if let block = ZLPhotoConfiguration.default().operateBeforeDoneAction {
-                block(self) { [weak nav] in
-                    nav?.selectImageBlock?()
+                block(self, nav.arrSelectedModels) { [weak nav] shouldContinue in
+                    if shouldContinue {
+                        nav?.selectImageBlock?()
+                    }
                 }
             } else {
                 nav.selectImageBlock?()
@@ -728,7 +738,7 @@ class ZLPhotoPreviewController: UIViewController {
             return
         }
         
-        guard canAddModel(currentModel, currentSelectCount: nav.arrSelectedModels.count, sender: self) else {
+        guard canAddModel(currentModel, currentSelectModels: nav.arrSelectedModels, sender: self) else {
             return
         }
         
@@ -781,6 +791,8 @@ class ZLPhotoPreviewController: UIViewController {
         let cell = collectionView.cellForItem(at: IndexPath(row: currentIndex, section: 0))
         if let cell = cell as? ZLVideoPreviewCell, cell.isPlaying {
             hideNavView = true
+        } else if let cell = cell as? ZLNetVideoPreviewCell, cell.isPlaying {
+            hideNavView = true
         }
         navView.isHidden = hideNavView
         bottomView.isHidden = showBottomViewAndSelectBtn ? hideNavView : true
@@ -816,29 +828,34 @@ class ZLPhotoPreviewController: UIViewController {
     }
     
     private func showEditVideoVC(model: ZLPhotoModel, avAsset: AVAsset) {
+        let config = ZLPhotoConfiguration.default()
         let nav = navigationController as? ZLImageNavController
-        let vc = ZLEditVideoViewController(avAsset: avAsset)
+        let vc = ZLEditVideoViewController(avAsset: avAsset, assetDataSize: model.dataSize, editModel: model.editVideoModel)
         vc.modalPresentationStyle = .fullScreen
         
-        vc.editFinishBlock = { [weak self, weak nav] url in
-            if let url = url {
-                ZLPhotoManager.saveVideoToAlbum(url: url) { [weak self, weak nav] error, asset in
-                    if error == nil, let asset {
-                        let m = ZLPhotoModel(asset: asset)
-                        nav?.arrSelectedModels.removeAll()
-                        nav?.arrSelectedModels.append(m)
-                        ZLPhotoConfiguration.default().didSelectAsset?(asset)
-                        self?.doneBtnClick()
-                    } else {
-                        showAlertView(localLanguageTextValue(.saveVideoError), self)
-                    }
-                }
-            } else {
-                nav?.arrSelectedModels.removeAll()
-                nav?.arrSelectedModels.append(model)
-                ZLPhotoConfiguration.default().didSelectAsset?(model.asset)
-                self?.doneBtnClick()
+        vc.editFinishBlock = { [weak self, weak nav] editModel in
+            guard let `self` = self else { return }
+            
+            model.editVideoModel = editModel
+            
+            // 单选，且不显示选择按钮的情况下，编辑后直接返回结果
+            if config.maxSelectCount == 1,
+               !config.showSelectBtnWhenSingleSelect {
+                self.doneBtnClick()
+                return
             }
+            
+            if nav?.arrSelectedModels.contains(where: { $0 == model }) == false {
+                model.isSelected = true
+                nav?.arrSelectedModels.append(model)
+                config.didSelectAsset?(model.asset)
+                self.resetSubviewStatus()
+                self.selPhotoPreview?.addSelModel(model: model)
+            } else {
+                self.selPhotoPreview?.refreshCell(for: model)
+            }
+            
+            self.collectionView.reloadItems(at: [IndexPath(row: self.currentIndex, section: 0)])
         }
         
         present(vc, animated: false, completion: nil)
@@ -959,11 +976,27 @@ extension ZLPhotoPreviewController: UICollectionViewDataSource, UICollectionView
             
             baseCell = cell
         } else if config.allowSelectVideo, model.type == .video {
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ZLVideoPreviewCell.zl.identifier, for: indexPath) as! ZLVideoPreviewCell
-            
-            cell.model = model
-            
-            baseCell = cell
+            if let url = model.editVideoModel?.url {
+                let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ZLNetVideoPreviewCell.zl.identifier, for: indexPath) as! ZLNetVideoPreviewCell
+                
+                cell.configureCell(videoURL: url, httpHeader: nil) {
+                    (
+                        image: model.editVideoModel?.coverImage,
+                        size: CGSize(
+                            width: model.asset.pixelWidth,
+                            height: model.asset.pixelHeight
+                        )
+                    )
+                }
+                
+                baseCell = cell
+            } else {
+                let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ZLVideoPreviewCell.zl.identifier, for: indexPath) as! ZLVideoPreviewCell
+                
+                cell.model = model
+                
+                baseCell = cell
+            }
         } else {
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ZLPhotoPreviewCell.zl.identifier, for: indexPath) as! ZLPhotoPreviewCell
 
@@ -1283,7 +1316,7 @@ class ZLPhotoPreviewSelectedViewCell: UICollectionViewCell {
         
         if model.type == .video {
             tagImageView.isHidden = false
-            tagImageView.image = .zl.getImage("zl_video")
+            tagImageView.image = .zl.getImage(model.editVideoModel != nil ? "zl_editImage_tag" : "zl_video")
             tagLabel.isHidden = true
         } else if ZLPhotoConfiguration.default().allowSelectGif, model.type == .gif {
             tagImageView.isHidden = true
@@ -1294,7 +1327,7 @@ class ZLPhotoPreviewSelectedViewCell: UICollectionViewCell {
             tagImageView.image = .zl.getImage("zl_livePhoto")
             tagLabel.isHidden = true
         } else {
-            if let _ = model.editImage {
+            if model.editImage != nil {
                 tagImageView.isHidden = false
                 tagImageView.image = .zl.getImage("zl_editImage_tag")
             } else {

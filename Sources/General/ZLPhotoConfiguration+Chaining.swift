@@ -125,12 +125,6 @@ public extension ZLPhotoConfiguration {
     }
     
     @discardableResult
-    func cropVideoAfterSelectThumbnail(_ value: Bool) -> ZLPhotoConfiguration {
-        cropVideoAfterSelectThumbnail = value
-        return self
-    }
-    
-    @discardableResult
     func saveNewImageAfterEdit(_ value: Bool) -> ZLPhotoConfiguration {
         saveNewImageAfterEdit = value
         return self
@@ -311,7 +305,7 @@ public extension ZLPhotoConfiguration {
     }
     
     @discardableResult
-    func operateBeforeDoneAction(_ block: ((UIViewController, @escaping () -> Void) -> Void)?) -> ZLPhotoConfiguration {
+    func operateBeforeDoneAction(_ block: ((_ currVC: UIViewController, _ selModels: [ZLPhotoModel], _ continueBlock: @escaping (_ shouldContinue: Bool) -> Void) -> Void)?) -> ZLPhotoConfiguration {
         operateBeforeDoneAction = block
         return self
     }

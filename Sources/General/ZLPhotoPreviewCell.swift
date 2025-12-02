@@ -400,6 +400,7 @@ class ZLLivePhotoPreviewCell: ZLPreviewBaseCell {
         let view = PHLivePhotoView()
         view.contentMode = .scaleAspectFit
         view.playbackGestureRecognizer.isEnabled = false
+        view.isMuted = false
         return view
     }()
     
@@ -702,7 +703,6 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
     
     private func configurePlayerLayer(_ item: AVPlayerItem) {
         playBtn.setImage(.zl.getImage("zl_playVideo"), for: .normal)
-        playBtn.isEnabled = true
         
         NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: player?.currentItem)
         
@@ -715,6 +715,16 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
         playerLayer?.frame = playerView.bounds
         playerView.layer.insertSublayer(playerLayer!, at: 0)
         
+        var observer: NSKeyValueObservation?
+        observer = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            if observedItem.status == .readyToPlay {
+                observer?.invalidate()
+                observedItem.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    self?.playBtn.isEnabled = true
+                }
+            }
+        }
+        
         NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: AVPlayerItem.didPlayToEndTimeNotification, object: player?.currentItem)
     }
     
@@ -723,11 +733,7 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
         let duration = player?.currentItem?.duration
         if !isPlaying {
             if currentTime?.value == duration?.value {
-                if #available(iOS 11.0, *) {
-                    player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1), completionHandler: nil)
-                } else {
-                    player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1))
-                }
+                player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             imageView.isHidden = true
             try? AVAudioSession.sharedInstance().setCategory(.playback)
@@ -762,7 +768,7 @@ class ZLVideoPreviewCell: ZLPreviewBaseCell {
         }
         
         if seekToZero {
-            player?.seek(to: .zero)
+            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
         }
         
         playBtn.setImage(.zl.getImage("zl_playVideo"), for: .normal)
@@ -864,11 +870,7 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
     }
     
     override func didEndDisplaying() {
-        if #available(iOS 11.0, *) {
-            player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1), completionHandler: nil)
-        } else {
-            player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1))
-        }
+        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
     }
     
     override func animateImageFrame(convertTo view: UIView) -> CGRect {
@@ -889,11 +891,7 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
         let duration = player?.currentItem?.duration
         if player?.rate == 0 {
             if currentTime?.value == duration?.value {
-                if #available(iOS 11.0, *) {
-                    player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1), completionHandler: nil)
-                } else {
-                    player?.currentItem?.seek(to: CMTimeMake(value: 0, timescale: 1))
-                }
+                player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
             }
             
             coverImageView.isHidden = true
@@ -941,24 +939,30 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         }
         if seekToZero {
-            player?.seek(to: .zero)
+            player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
         }
         
         playBtn.setImage(.zl.getImage("zl_playVideo"), for: .normal)
         singleTapBlock?()
     }
     
-    func configureCell(videoUrl: URL, httpHeader: [String: Any]?, coverImageBlock: (() -> UIImage?)?) {
-        videoURLString = videoUrl.absoluteString
+    func configureCell(videoURL: URL, httpHeader: [String: Any]?, coverImageBlock: (() -> (image: UIImage?, size: CGSize?))?) {
+        videoURLString = videoURL.absoluteString
         player = nil
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
+        playBtn.isEnabled = false
+        
+        let blockValue = coverImageBlock?()
+        if let size = blockValue?.size {
+            videoSizeCache[videoURL.absoluteString] = size
+        }
         coverImageView.frame = .zero
-        coverImageView.image = coverImageBlock?()
+        coverImageView.image = blockValue?.image
         
         var options: [String: Any] = [:]
         options["AVURLAssetHTTPHeaderFieldsKey"] = httpHeader
-        let asset = AVURLAsset(url: videoUrl, options: options)
+        let asset = AVURLAsset(url: videoURL, options: options)
         let item = AVPlayerItem(asset: asset)
         player = AVPlayer(playerItem: item)
         playerLayer = AVPlayerLayer(player: player)
@@ -974,6 +978,17 @@ class ZLNetVideoPreviewCell: ZLPreviewBaseCell {
             CATransaction.commit()
         }
         playerView.layer.insertSublayer(playerLayer!, at: 0)
+        
+        var observer: NSKeyValueObservation?
+        observer = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
+            if observedItem.status == .readyToPlay {
+                observer?.invalidate()
+                observedItem.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                    self?.playBtn.isEnabled = true
+                }
+            }
+        }
+        
         NotificationCenter.default.addObserver(self, selector: #selector(playFinish), name: AVPlayerItem.didPlayToEndTimeNotification, object: player?.currentItem)
     }
     

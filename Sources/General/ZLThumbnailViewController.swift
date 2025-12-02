@@ -506,7 +506,7 @@ class ZLThumbnailViewController: UIViewController {
         dismissInteractiveTransition?.startTransition = {
         }
         
-        dismissInteractiveTransition?.cancelTransition = { [weak self] in
+        dismissInteractiveTransition?.cancelTransition = {
         }
         
         dismissInteractiveTransition?.finishTransition = {
@@ -710,8 +710,10 @@ class ZLThumbnailViewController: UIViewController {
     @objc private func doneBtnClick() {
         let nav = navigationController as? ZLImageNavController
         if let block = ZLPhotoConfiguration.default().operateBeforeDoneAction {
-            block(self) { [weak nav] in
-                nav?.selectImageBlock?()
+            block(self, nav?.arrSelectedModels ?? []) { [weak nav] shouldContinue in
+                if shouldContinue {
+                    nav?.selectImageBlock?()
+                }
             }
         } else {
             nav?.selectImageBlock?()
@@ -763,7 +765,7 @@ class ZLThumbnailViewController: UIViewController {
                         return
                     }
                     
-                    if !(cell?.enableSelect ?? true) || !canAddModel(m, currentSelectCount: nav.arrSelectedModels.count, sender: self) {
+                    if !(cell?.enableSelect ?? true) || !canAddModel(m, currentSelectModels: nav.arrSelectedModels, sender: self) {
                         panSelectType = .none
                         return
                     }
@@ -834,7 +836,7 @@ class ZLThumbnailViewController: UIViewController {
                     if inSection {
                         if self.panSelectType == .select {
                             if !m.isSelected,
-                               canAddModel(m, currentSelectCount: nav.arrSelectedModels.count, sender: self, showAlert: false) {
+                               canAddModel(m, currentSelectModels: nav.arrSelectedModels, sender: self, showAlert: false) {
                                 m.isSelected = true
                             }
                         } else if self.panSelectType == .cancel {
@@ -1135,7 +1137,7 @@ class ZLThumbnailViewController: UIViewController {
         // 是否是单选模式，且不显示选择按钮
         let isSingleAndNotShowSelectBtnMode = config.maxSelectCount == 1 && !config.showSelectBtnWhenSingleSelect
         
-        if canSelect, canAddModel(newModel, currentSelectCount: nav?.arrSelectedModels.count ?? 0, sender: self, showAlert: false) {
+        if canSelect, canAddModel(newModel, currentSelectModels: nav?.arrSelectedModels, sender: self, showAlert: false) {
             if !shouldDirectEdit(newModel) {
                 if config.callbackDirectlyAfterTakingPhoto || !isSingleAndNotShowSelectBtnMode {
                     newModel.isSelected = true
@@ -1217,27 +1219,14 @@ class ZLThumbnailViewController: UIViewController {
         
         func inner_showEditVideoVC(_ avAsset: AVAsset) {
             let vc = ZLEditVideoViewController(avAsset: avAsset)
-            vc.editFinishBlock = { [weak self, weak nav] url in
-                if let url = url {
-                    ZLPhotoManager.saveVideoToAlbum(url: url) { [weak self, weak nav] error, asset in
-                        if error == nil, let asset {
-                            let m = ZLPhotoModel(asset: asset)
-                            m.isSelected = true
-                            nav?.arrSelectedModels.append(m)
-                            config.didSelectAsset?(m.asset)
-                            
-                            self?.doneBtnClick()
-                        } else {
-                            showAlertView(localLanguageTextValue(.saveVideoError), self)
-                        }
-                    }
-                } else {
-                    model.isSelected = true
-                    nav?.arrSelectedModels.append(model)
-                    config.didSelectAsset?(model.asset)
-                    
-                    self?.doneBtnClick()
-                }
+            vc.editFinishBlock = { [weak self, weak nav] editModel in
+                model.isSelected = true
+                model.editVideoModel = editModel
+                nav?.arrSelectedModels.removeAll()
+                nav?.arrSelectedModels.append(model)
+                config.didSelectAsset?(model.asset)
+                
+                self?.doneBtnClick()
             }
             vc.modalPresentationStyle = .fullScreen
             showDetailViewController(vc, sender: nil)
@@ -1379,8 +1368,7 @@ extension ZLThumbnailViewController: UICollectionViewDataSource, UICollectionVie
         
         cell.selectedBlock = { [weak self, weak nav] block in
             if !model.isSelected {
-                let currentSelectCount = nav?.arrSelectedModels.count ?? 0
-                guard canAddModel(model, currentSelectCount: currentSelectCount, sender: self) else {
+                guard canAddModel(model, currentSelectModels: nav?.arrSelectedModels, sender: self) else {
                     return
                 }
                 
@@ -1513,14 +1501,10 @@ extension ZLThumbnailViewController: UICollectionViewDataSource, UICollectionVie
             config.maxSelectCount == 1 &&
             model.type.rawValue < ZLPhotoModel.MediaType.video.rawValue
         
-        let canEditVideo = (config.editAfterSelectThumbnailImage &&
+        let canEditVideo = config.editAfterSelectThumbnailImage &&
             config.allowEditVideo &&
             model.type == .video &&
-            config.maxSelectCount == 1) ||
-            (config.allowEditVideo &&
-                model.type == .video &&
-                !config.allowMixSelect &&
-                config.cropVideoAfterSelectThumbnail)
+            config.maxSelectCount == 1
         
         // 当前未选择图片 或已经选择了一张并且点击的是已选择的图片
         let nav = navigationController as? ZLImageNavController
@@ -1601,33 +1585,24 @@ extension ZLThumbnailViewController: UICollectionViewDataSource, UICollectionVie
             if uiConfig.showSelectedBorder {
                 cell.layer.borderWidth = 4
             }
-        } else {
-            let selCount = arrSel.count
-            if selCount < config.maxSelectCount {
-                if config.allowMixSelect {
-                    let videoCount = arrSel.filter { $0.type == .video }.count
-                    if videoCount >= config.maxVideoSelectCount, model.type == .video {
-                        cell.coverView.backgroundColor = .zl.invalidMaskColor
-                        cell.coverView.isHidden = !uiConfig.showInvalidMask
-                        cell.enableSelect = false
-                    } else if (config.maxSelectCount - selCount) <= (config.minVideoSelectCount - videoCount), model.type != .video {
-                        cell.coverView.backgroundColor = .zl.invalidMaskColor
-                        cell.coverView.isHidden = !uiConfig.showInvalidMask
-                        cell.enableSelect = false
-                    }
-                } else if selCount > 0 {
-                    cell.coverView.backgroundColor = .zl.invalidMaskColor
-                    cell.coverView.isHidden = (!uiConfig.showInvalidMask || model.type != .video)
-                    cell.enableSelect = model.type != .video
-                }
-            } else if selCount >= config.maxSelectCount {
+            return
+        }
+        
+        let selCount = arrSel.count
+        if selCount < config.maxSelectCount {
+            if !config.allowMixSelect, selCount > 0 {
+                let selectIsVideo = arrSel.first?.isVideo ?? false
                 cell.coverView.backgroundColor = .zl.invalidMaskColor
-                cell.coverView.isHidden = !uiConfig.showInvalidMask
-                cell.enableSelect = false
+                cell.coverView.isHidden = (!uiConfig.showInvalidMask || model.isVideo == selectIsVideo)
+                cell.enableSelect = model.isVideo == selectIsVideo
             }
-            if uiConfig.showSelectedBorder {
-                cell.layer.borderWidth = 0
-            }
+        } else if selCount >= config.maxSelectCount {
+            cell.coverView.backgroundColor = .zl.invalidMaskColor
+            cell.coverView.isHidden = !uiConfig.showInvalidMask
+            cell.enableSelect = false
+        }
+        if uiConfig.showSelectedBorder {
+            cell.layer.borderWidth = 0
         }
     }
     

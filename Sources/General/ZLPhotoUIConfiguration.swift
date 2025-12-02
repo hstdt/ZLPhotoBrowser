@@ -372,7 +372,7 @@ public class ZLPhotoUIConfiguration: NSObject {
     
     /// The disable state title color of bottom tool view buttons in preview interface.  Without done button.
     /// 预览大图界面底部按钮不可交互状态下标题颜色，不包括 `完成` 按钮
-    public var bottomToolViewBtnDisableTitleColorOfPreviewVC: UIColor = .zl.rgba(168, 168, 168)
+    public var bottomToolViewBtnDisableTitleColorOfPreviewVC: UIColor = .zl.rgba(80, 80, 80)
     
     /// The disable state title color of bottom tool view done button  in preview interface.
     /// 预览大图界面底部 `完成` 按钮不可交互状态下标题颜色

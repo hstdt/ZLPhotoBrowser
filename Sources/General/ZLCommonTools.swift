@@ -44,4 +44,33 @@ class ZLCommonTools: NSObject {
             return ""
         }
     }
+    
+    class func getLocalFileSize(for fileURL: URL) -> ZLPhotoConfiguration.KBUnit {
+        guard fileURL.isFileURL else {
+            return 0
+        }
+
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return 0
+        }
+
+        do {
+            let info = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            var size = (info[.size] as? ZLPhotoConfiguration.KBUnit) ?? 0
+            
+            let subpaths = FileManager.default.subpaths(atPath: fileURL.path) ?? []
+            if subpaths.isEmpty {
+                return ZLPhotoConfiguration.KBUnit(size / 1024)
+            }
+            
+            subpaths.forEach {
+                size += getLocalFileSize(for: URL(fileURLWithPath: $0))
+            }
+            
+            return size
+        } catch {
+            return 0
+        }
+    }
 }

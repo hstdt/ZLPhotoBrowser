@@ -28,6 +28,22 @@ import UIKit
 import Photos
 import AVFoundation
 
+public class ZLEditVideoModel: NSObject {
+    let start: TimeInterval
+    let end: TimeInterval
+    let preDuration: TimeInterval
+    let url: URL
+    let coverImage: UIImage?
+    
+    init(start: TimeInterval, end: TimeInterval, preDuration: TimeInterval, url: URL, coverImage: UIImage?) {
+        self.start = start
+        self.end = end
+        self.preDuration = preDuration
+        self.url = url
+        self.coverImage = coverImage
+    }
+}
+
 public class ZLEditVideoViewController: UIViewController {
     private enum Layout {
         static let frameImageSize = CGSize(width: CGFloat(round(50.0 * 2.0 / 3.0)), height: 50.0)
@@ -35,6 +51,10 @@ public class ZLEditVideoViewController: UIViewController {
     }
     
     private let avAsset: AVAsset
+    
+    private let assetDataSize: ZLPhotoConfiguration.KBUnit?
+    
+    private let editModel: ZLEditVideoModel?
     
     private let animateDismiss: Bool
     
@@ -129,7 +149,9 @@ public class ZLEditVideoViewController: UIViewController {
         return label
     }()
     
-    private var measureCount = 0
+    private lazy var measureCount: Int = {
+        Int(avAsset.duration.seconds / interval)
+    }()
     
     private var maxEditDuration: TimeInterval {
         let assetDuration = avAsset.duration.seconds
@@ -137,7 +159,7 @@ public class ZLEditVideoViewController: UIViewController {
     }
     
     private lazy var interval: TimeInterval = {
-        return TimeInterval(maxEditDuration) / 10
+        TimeInterval(maxEditDuration) / 10
     }()
     
     private lazy var requestFrameImageQueue: OperationQueue = {
@@ -166,9 +188,18 @@ public class ZLEditVideoViewController: UIViewController {
         return g
     }()
     
-    @objc public var editFinishBlock: ((URL?) -> Void)?
+    private lazy var coverImageGenerator: AVAssetImageGenerator = {
+        let g = AVAssetImageGenerator(asset: self.avAsset)
+        g.appliesPreferredTrackTransform = true
+        g.requestedTimeToleranceBefore = .zero
+        g.requestedTimeToleranceAfter = .zero
+        g.apertureMode = .productionAperture
+        return g
+    }()
     
-    @objc public var cancelEditBlock: (() -> Void)?
+    public var editFinishBlock: ((ZLEditVideoModel?) -> Void)?
+    
+    public var cancelEditBlock: (() -> Void)?
     
     override public var prefersStatusBarHidden: Bool {
         return true
@@ -195,9 +226,18 @@ public class ZLEditVideoViewController: UIViewController {
     /// initialize
     /// - Parameters:
     ///   - avAsset: AVAsset对象，需要传入本地视频，网络视频不支持
+    ///   - assetDataSize: 视频对象原大小
+    ///   - editModel: 视频上次编辑结果对象
     ///   - animateDismiss: 退出界面时是否显示dismiss动画
-    @objc public init(avAsset: AVAsset, animateDismiss: Bool = false) {
+    public init(
+        avAsset: AVAsset,
+        assetDataSize: ZLPhotoConfiguration.KBUnit? = nil,
+        editModel: ZLEditVideoModel? = nil,
+        animateDismiss: Bool = false
+    ) {
         self.avAsset = avAsset
+        self.assetDataSize = assetDataSize
+        self.editModel = editModel
         self.animateDismiss = animateDismiss
         super.init(nibName: nil, bundle: nil)
     }
@@ -257,23 +297,59 @@ public class ZLEditVideoViewController: UIViewController {
         
         let frameViewW = Layout.frameImageSize.width * 10
         frameImageBorderView.frame = CGRect(x: (view.bounds.width - frameViewW) / 2, y: collectionView.frame.minY, width: frameViewW, height: Layout.frameImageSize.height)
-        // 左右拖动view
-        leftSideView.frame = CGRect(
-            x: frameImageBorderView.zl.left - Layout.leftRightSideViewW / 2,
-            y: collectionView.zl.top,
-            width: Layout.leftRightSideViewW,
-            height: Layout.frameImageSize.height
-        )
-        rightSideView.frame = CGRect(
-            x: frameImageBorderView.zl.right - Layout.leftRightSideViewW / 2,
-            y: collectionView.zl.top,
-            width: Layout.leftRightSideViewW,
-            height: Layout.frameImageSize.height
-        )
-        durationLabel.frame = CGRect(x: 0, y: 0, width: 100, height: 20)
-        updateSubviewStatus()
+        
+        var innerStartX: CGFloat = 0
+        var durationW: CGFloat = frameImageBorderView.zl.width
+        if let editModel {
+            let preTime = editModel.preDuration
+            var oneFrameDuration = interval
+            if measureCount > 10 {
+                oneFrameDuration = (avAsset.duration.seconds - Double(ZLPhotoConfiguration.default().maxEditVideoTime)) / Double(measureCount - 10)
+            }
+            
+            let offsetX = preTime / oneFrameDuration * Layout.frameImageSize.width
+            collectionView.contentOffset = CGPoint(x: offsetX, y: 0)
+            
+            let innerStartTime = editModel.start - editModel.preDuration
+            innerStartX = innerStartTime / interval * Layout.frameImageSize.width
+            
+            let durationTime = editModel.end - editModel.start
+            durationW = durationTime / interval * Layout.frameImageSize.width
+        }
+        
+        if isRTL() {
+            // 左右拖动view
+            rightSideView.frame = CGRect(
+                x: frameImageBorderView.zl.right - Layout.leftRightSideViewW / 2 - innerStartX,
+                y: collectionView.zl.top,
+                width: Layout.leftRightSideViewW,
+                height: Layout.frameImageSize.height
+            )
+            leftSideView.frame = CGRect(
+                x: max(rightSideView.zl.left - durationW, frameImageBorderView.zl.left - Layout.leftRightSideViewW / 2),
+                y: collectionView.zl.top,
+                width: Layout.leftRightSideViewW,
+                height: Layout.frameImageSize.height
+            )
+        } else {
+            // 左右拖动view
+            leftSideView.frame = CGRect(
+                x: frameImageBorderView.zl.left - Layout.leftRightSideViewW / 2 + innerStartX,
+                y: collectionView.zl.top,
+                width: Layout.leftRightSideViewW,
+                height: Layout.frameImageSize.height
+            )
+            rightSideView.frame = CGRect(
+                x: min(leftSideView.zl.left + durationW, frameImageBorderView.zl.right - Layout.leftRightSideViewW / 2),
+                y: collectionView.zl.top,
+                width: Layout.leftRightSideViewW,
+                height: Layout.frameImageSize.height
+            )
+        }
         
         frameImageBorderView.validRect = frameImageBorderView.convert(clipRect(), from: view)
+        durationLabel.frame = CGRect(x: 0, y: 0, width: 100, height: 20)
+        updateSubviewStatus()
     }
     
     private func setupUI() {
@@ -306,37 +382,76 @@ public class ZLEditVideoViewController: UIViewController {
     }
     
     @objc private func doneBtnClick() {
-        cleanTimer()
+        func callback(editModel: ZLEditVideoModel?) {
+            // 内部自己调用，先回调在退出
+            if let nav = presentingViewController as? ZLImageNavController,
+               nav.topViewController is ZLPhotoPreviewController {
+                editFinishBlock?(editModel)
+                dismiss(animated: animateDismiss)
+            } else {
+                dismiss(animated: animateDismiss) {
+                    self.editFinishBlock?(editModel)
+                }
+            }
+        }
+        
+        let config = ZLPhotoConfiguration.default()
         
         let d = CGFloat(interval) * clipRect().width / Layout.frameImageSize.width
-        if ZLPhotoConfiguration.Second(round(d)) < ZLPhotoConfiguration.default().minSelectVideoDuration {
-            let message = String(format: localLanguageTextValue(.shorterThanMinVideoDuration), ZLPhotoConfiguration.default().minSelectVideoDuration)
-            showAlertView(message, self)
-            return
-        }
-        if ZLPhotoConfiguration.Second(round(d)) > ZLPhotoConfiguration.default().maxSelectVideoDuration {
-            let message = String(format: localLanguageTextValue(.longerThanMaxVideoDuration), ZLPhotoConfiguration.default().maxSelectVideoDuration)
-            showAlertView(message, self)
+        if !videoDurationIsValid(ZLPhotoConfiguration.Second(round(d)), sender: self) {
             return
         }
         
         // Max deviation is 0.01
         if abs(d - avAsset.duration.seconds) <= 0.01 {
-            dismiss(animated: animateDismiss) {
-                self.editFinishBlock?(nil)
+            if let assetDataSize, !videoSizeIsValid(assetDataSize, sender: self) {
+                return
             }
+            
+            callback(editModel: nil)
+            return
+        }
+        
+        if let editModel,
+           abs(editModel.start - getStartTime().seconds) <= 0.01,
+           abs(editModel.end - getEndTime().seconds) <= 0.01 {
+            callback(editModel: editModel)
             return
         }
         
         let hud = ZLProgressHUD.show(toast: .processing)
-        
         ZLVideoManager.exportEditVideo(for: avAsset, range: getTimeRange()) { [weak self] url, error in
             hud.hide()
-            if let er = error {
-                showAlertView(er.localizedDescription, self)
-            } else if url != nil {
-                self?.dismiss(animated: self?.animateDismiss ?? false) {
-                    self?.editFinishBlock?(url)
+            guard let `self` = self else { return }
+            
+            if let error {
+                showAlertView(error.localizedDescription, self)
+            } else if let url {
+                if config.shouldCheckVideoDataSize {
+                    let size = ZLCommonTools.getLocalFileSize(for: url)
+                    if !videoSizeIsValid(size, sender: self) {
+                        return
+                    }
+                }
+                
+                
+                self.coverImageGenerator.generateCGImagesAsynchronously(forTimes: [NSValue(time: self.getStartTime())]) { _, cgImage, _, result, _ in
+                    var coverImage: UIImage?
+                    if result == .succeeded, let cg = cgImage {
+                        coverImage = UIImage(cgImage: cg)
+                    }
+                    
+                    ZLMainAsync {
+                        let editModel = ZLEditVideoModel(
+                            start: self.getStartTime().seconds,
+                            end: self.getEndTime().seconds,
+                            preDuration: self.getPreTime().seconds,
+                            url: url,
+                            coverImage: coverImage
+                        )
+                        
+                        callback(editModel: editModel)
+                    }
                 }
             }
         }
@@ -426,8 +541,7 @@ public class ZLEditVideoViewController: UIViewController {
     }
     
     private func analysisAssetImages() {
-        let duration = avAsset.duration.seconds
-        guard duration > 0 else {
+        guard measureCount > 0 else {
             showFetchFailedAlert()
             return
         }
@@ -435,7 +549,6 @@ public class ZLEditVideoViewController: UIViewController {
         let player = AVPlayer(playerItem: item)
         playerLayer.player = player
         
-        measureCount = Int(duration / interval)
         collectionView.reloadData()
         startTimer()
         requestVideoMeasureFrameImage()
@@ -505,15 +618,22 @@ public class ZLEditVideoViewController: UIViewController {
         playerLayer.player?.pause()
     }
     
-    private func getStartTime() -> CMTime {
+    /// 获取框选外区域总时长
+    private func getPreTime() -> CMTime {
         var oneFrameDuration = interval
         if measureCount > 10 {
             // 如果measureCount > 10，计算出框选区域外，每一帧图片占的时长
+            // 比如视频16.5s，那么此时measureCount为16，为了保证框选区域内十帧是10s，所以框选区域外的每一帧图片要均摊多出来的0.5s
             oneFrameDuration = (avAsset.duration.seconds - Double(ZLPhotoConfiguration.default().maxEditVideoTime)) / Double(measureCount - 10)
         }
         
         let offsetX = collectionView.contentOffset.x
-        let previousSecond = offsetX / Layout.frameImageSize.width * oneFrameDuration
+        let previousSeconds = offsetX / Layout.frameImageSize.width * oneFrameDuration
+        return CMTimeMakeWithSeconds(Float64(previousSeconds), preferredTimescale: avAsset.duration.timescale)
+    }
+    
+    private func getStartTime() -> CMTime {
+        let previousTime = getPreTime()
         
         // 框选区域内起始时长
         let innerRect = frameImageBorderView.convert(clipRect(), from: view)
@@ -524,9 +644,8 @@ public class ZLEditVideoViewController: UIViewController {
             innerPreviousSecond = innerRect.minX / Layout.frameImageSize.width * interval
         }
         
-        let totalDuration = max(0, previousSecond + innerPreviousSecond)
-        
-        return CMTimeMakeWithSeconds(Float64(totalDuration), preferredTimescale: avAsset.duration.timescale)
+        let innerTime = CMTimeMakeWithSeconds(Float64(max(innerPreviousSecond, 0)), preferredTimescale: avAsset.duration.timescale)
+        return previousTime + innerTime
     }
     
     private func getEndTime() -> CMTime {
