@@ -1339,8 +1339,10 @@ class ZLPhotoPreviewSelectedViewCell: UICollectionViewCell {
         imageIdentifier = model.ident
         imageView.image = nil
         
-        if let ei = model.editImage {
-            imageView.image = ei
+        if let editImage = model.editImage {
+            imageView.image = editImage
+        } else if let editVideoModel = model.editVideoModel {
+            imageView.image = editVideoModel.coverImage
         } else {
             imageRequestID = ZLPhotoManager.fetchImage(for: model.asset, size: size, completion: { [weak self] image, _ in
                 if self?.imageIdentifier == self?.model.ident {

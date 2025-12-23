@@ -207,6 +207,7 @@ public class ZLEditVideoViewController: UIViewController {
         zl_debugPrint("ZLEditVideoViewController deinit")
         cleanTimer()
         generator.cancelAllCGImageGeneration()
+        coverImageGenerator.cancelAllCGImageGeneration()
         if avAssetRequestID > PHInvalidImageRequestID {
             PHImageManager.default().cancelImageRequest(avAssetRequestID)
         }
