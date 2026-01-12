@@ -70,7 +70,7 @@ public class ZLEditVideoViewController: UIViewController {
     private lazy var doneBtn: UIButton = {
         let btn = UIButton(type: .custom)
         btn.setTitle(localLanguageTextValue(.editFinish), for: .normal)
-        btn.setTitleColor(.zl.bottomToolViewBtnNormalTitleColor, for: .normal)
+        btn.setTitleColor(.zl.bottomToolViewDoneBtnNormalTitleColor, for: .normal)
         btn.titleLabel?.font = ZLLayout.bottomToolTitleFont
         btn.addTarget(self, action: #selector(doneBtnClick), for: .touchUpInside)
         btn.backgroundColor = .zl.bottomToolViewBtnNormalBgColor
